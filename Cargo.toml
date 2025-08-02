@@ -18,3 +18,5 @@ demand-share-accounting-ext = { git = "https://github.com/theivess/share-account
 demand-sv2-connection = {git = "https://github.com/theivess/demand-sv2-connection"}
 key-utils = {version = "1.2.0", features = ["std"]}
 secp256k1 = { version = "0.28.2", features = ["rand"] }
+hex = "0.4.3"
+bs58 = { version = "0.5.1", features = ["check"] }
