@@ -5,6 +5,7 @@
 
 use anyhow::Result;
 use clap::Parser;
+use demand_share_accounting_ext::ShareOk;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -445,6 +446,16 @@ impl ConnectionHandler {
                         if let Err(e) = self.send_new_txs(sender).await {
                             error!("Error sending NewTxs: {}", e);
                         }
+
+                        if let Err(e) = self.send_share_ok(sender, 1000, 0).await {
+                            error!("Error sending auto shares success: {}", e);
+                        }
+
+
+                        self.handle_get_shares(sender).await?;
+                    }
+                    if let Err(e) = self.send_new_block_found(sender).await {
+                        error!("Error sending new block found: {}", e);
                     }
                 }
             }
@@ -493,7 +504,7 @@ impl ConnectionHandler {
             0x32 => {
                 let get_shares: GetShares<'_> = binary_sv2::from_bytes(&mut payload)
                     .map_err(|e| anyhow::anyhow!("Failed to parse GetShares: {:?}", e))?;
-                self.handle_get_shares(get_shares, sender).await?;
+                self.handle_get_shares(sender).await?;
             }
             _ => {
                 warn!(
@@ -552,7 +563,6 @@ impl ConnectionHandler {
 
     async fn handle_get_shares(
         &self,
-        _request: GetShares<'_>,
         sender: &mut tokio::sync::mpsc::Sender<EitherFrame>,
     ) -> Result<()> {
         info!("Handling GetShares request");
@@ -651,6 +661,70 @@ impl ConnectionHandler {
         Ok(())
     }
 
+    async fn send_auto_shares_success(
+        &self,
+        sender: &mut tokio::sync::mpsc::Sender<EitherFrame>,
+    ) -> Result<()> {
+        info!("📦 Auto-sending GetSharesSuccess");
+
+        // Create mock shares data - use smaller shares
+        let mut shares_vec = Vec::new();
+        for i in 0..3 {
+            // Create proper extranonce
+            let mut extranonce_data = Vec::new();
+            for _ in 0..32 {
+                extranonce_data.push(rand::random::<u8>());
+            }
+            let extranonce: binary_sv2::B032<'static> = extranonce_data
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("Failed to convert extranonce to B032"))?;
+
+            // Create proper merkle path
+            let mut merkle_path_data = Vec::new();
+            for _ in 0..96 {
+                // 3 levels * 32 bytes each
+                merkle_path_data.push(rand::random::<u8>());
+            }
+            let merkle_path: binary_sv2::B064K<'static> = merkle_path_data
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("Failed to convert merkle_path to B064K"))?;
+
+            let share = Share {
+                nonce: rand::random::<u32>(),
+                ntime: rand::random::<u32>(),
+                version: 0x20000000,
+                extranonce,
+                job_id: 1000,
+                reference_job_id: 1000,
+                share_index: i,
+                merkle_path,
+            };
+            shares_vec.push(share);
+        }
+
+        let shares: binary_sv2::Seq064K<Share> = shares_vec
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("Failed to convert shares to Seq064K"))?;
+
+        let shares_success = GetSharesSuccess { shares };
+
+        let msg = PoolExtMessages::ShareAccountingMessages(
+            ShareAccountingMessages::GetSharesSuccess(shares_success),
+        );
+        let frame: StdFrame = msg
+            .try_into()
+            .map_err(|e| anyhow::anyhow!("Failed to create frame: {:?}", e))?;
+        let either_frame: EitherFrame = frame.into();
+
+        sender
+            .send(either_frame)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to send response: {:?}", e))?;
+        info!("Sent GetSharesSuccess");
+
+        Ok(())
+    }
+
     // Replace the entire send_new_txs function around line 658:
     async fn send_new_txs(
         &self,
@@ -689,6 +763,36 @@ impl ConnectionHandler {
             .map_err(|e| anyhow::anyhow!("Failed to send response: {:?}", e))?;
         info!("Sent NewTxs");
 
+        Ok(())
+    }
+
+    async fn send_share_ok(
+        &self,
+        sender: &mut tokio::sync::mpsc::Sender<EitherFrame>,
+        ref_job_id: u64,
+        share_index: u32,
+    ) -> Result<()> {
+        let share_ok = ShareOk {
+            ref_job_id,
+            share_index,
+        };
+
+        let msg =
+            PoolExtMessages::ShareAccountingMessages(ShareAccountingMessages::ShareOk(share_ok));
+        let frame: StdFrame = msg
+            .try_into()
+            .map_err(|e| anyhow::anyhow!("Failed to create frame: {:?}", e))?;
+        let either_frame: EitherFrame = frame.into();
+
+        sender
+            .send(either_frame)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to send response: {:?}", e))?;
+
+        info!(
+            "✅ Sent ShareOk for job_id: {}, share_index: {}",
+            ref_job_id, share_index
+        );
         Ok(())
     }
 
