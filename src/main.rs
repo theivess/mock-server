@@ -440,19 +440,25 @@ impl ConnectionHandler {
                     }
                 }
                 // Simulate periodic events
-                _ = tokio::time::sleep(Duration::from_secs(30)) => {
+                _ = tokio::time::sleep(Duration::from_secs(10)) => {
                     if matches!(self.server_mode, ServerMode::Honest) {
                         // Simulate new transactions
-                        if let Err(e) = self.send_new_txs(sender).await {
-                            error!("Error sending NewTxs: {}", e);
+                        for job_id in 1001..=1005 {  // 5 job IDs: 1001, 1002, 1003, 1004, 1005
+                            for share_index in 0..50 {  // 1000 shares per job_id
+                                if let Err(e) = self.send_share_ok(sender, job_id, share_index).await {
+                                    error!("Error sending ShareOk for job_id: {}, share_index: {}: {}", job_id, share_index, e);
+                                    break; // Stop on first error to avoid spam
+                                }
+
+                                // Small delay to avoid overwhelming the connection
+                                if share_index % 100 == 0 {
+                                    tokio::time::sleep(Duration::from_millis(10)).await;
+                                }
+                            }
+                            // info!("✅ Sent GetSharesSuccess");
+                            // info!("✅ Sent 1000 ShareOk messages for job_id: {}", job_id);
                         }
 
-                        if let Err(e) = self.send_share_ok(sender, 1000, 0).await {
-                            error!("Error sending auto shares success: {}", e);
-                        }
-
-
-                        self.handle_get_shares(sender).await?;
                     }
                     if let Err(e) = self.send_new_block_found(sender).await {
                         error!("Error sending new block found: {}", e);
@@ -789,10 +795,10 @@ impl ConnectionHandler {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to send response: {:?}", e))?;
 
-        info!(
-            "✅ Sent ShareOk for job_id: {}, share_index: {}",
-            ref_job_id, share_index
-        );
+        // info!(
+        //     "✅ Sent ShareOk for job_id: {}, share_index: {}",
+        //     ref_job_id, share_index
+        // );
         Ok(())
     }
 
